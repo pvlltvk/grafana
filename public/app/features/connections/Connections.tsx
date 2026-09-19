@@ -1,5 +1,6 @@
 import { Navigate, Routes, Route, useLocation } from 'react-router-dom-v5-compat';
 
+import { featureEnabled } from '@grafana/runtime';
 import { type StoreState, useSelector } from 'app/types/store';
 
 import { isOpenSourceBuildOrUnlicenced } from '../admin/EnterpriseAuthFeaturesCard';
@@ -10,6 +11,7 @@ import { CacheFeatureHighlightPage } from './pages/CacheFeatureHighlightPage';
 import ConnectionsHomePage from './pages/ConnectionsHomePage';
 import { DataSourceDashboardsPage } from './pages/DataSourceDashboardsPage';
 import { DataSourceDetailsPage } from './pages/DataSourceDetailsPage';
+import { DataSourcePermissionsPage } from './pages/DataSourcePermissionsPage';
 import { DataSourcesListPage } from './pages/DataSourcesListPage';
 import { EditDataSourcePage } from './pages/EditDataSourcePage';
 import { InsightsFeatureHighlightPage } from './pages/InsightsFeatureHighlightPage';
@@ -32,6 +34,7 @@ function RedirectToAddNewConnection() {
 export default function Connections() {
   const navIndex = useSelector((state: StoreState) => state.navIndex);
   const isAddNewConnectionPageOverridden = Boolean(navIndex['standalone-plugin-page-/connections/add-new-connection']);
+  const dsPermissionsEnforced = featureEnabled('dspermissions.enforcement');
   const shouldEnableFeatureHighlights = isOpenSourceBuildOrUnlicenced();
 
   return (
@@ -48,13 +51,23 @@ export default function Connections() {
       />
       <Route caseSensitive path={ROUTES.DataSourcesEdit.replace(ROUTES.Base, '')} element={<EditDataSourcePage />} />
 
+      {dsPermissionsEnforced && (
+        <Route
+          caseSensitive
+          path={ROUTES.DataSourcesEdit.replace(ROUTES.Base, '') + '/permissions'}
+          element={<DataSourcePermissionsPage />}
+        />
+      )}
+
       {shouldEnableFeatureHighlights && (
         <>
-          <Route
-            caseSensitive
-            path={ROUTES.DataSourcesEdit.replace(ROUTES.Base, '') + '/permissions'}
-            element={<PermissionsFeatureHighlightPage />}
-          />
+          {!dsPermissionsEnforced && (
+            <Route
+              caseSensitive
+              path={ROUTES.DataSourcesEdit.replace(ROUTES.Base, '') + '/permissions'}
+              element={<PermissionsFeatureHighlightPage />}
+            />
+          )}
           <Route
             caseSensitive
             path={ROUTES.DataSourcesEdit.replace(ROUTES.Base, '') + '/insights'}

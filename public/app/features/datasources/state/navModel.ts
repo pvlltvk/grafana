@@ -73,14 +73,21 @@ export function buildNavModel(dataSource: DataSourceSettings, plugin: GenericDat
     url: `datasources/edit/${dataSource.uid}/permissions`,
   };
 
-  if ((highlightTrial() && !isLoadingNav) || shouldEnableFeatureHighlights) {
+  // Enforcement is answered from the license in Enterprise and from
+  // rbac.datasource_permissions_enforcement in OSS. Once it is on the tab is real,
+  // so neither the upsell badge nor the highlight bypass of the permission check
+  // should apply any more.
+  const dsPermissionsEnforced = featureEnabled('dspermissions.enforcement');
+  const highlightDsPermissions = shouldEnableFeatureHighlights && !dsPermissionsEnforced;
+
+  if ((highlightTrial() && !isLoadingNav) || highlightDsPermissions) {
     dsPermissions.tabSuffix = () => ProBadge({ experimentId: permissionsExperimentId, eventVariant: 'trial' });
   }
 
-  if (featureEnabled('dspermissions.enforcement') || shouldEnableFeatureHighlights) {
+  if (dsPermissionsEnforced || highlightDsPermissions) {
     if (
       contextSrv.hasPermissionInMetadata(AccessControlAction.DataSourcesPermissionsRead, dataSource) ||
-      shouldEnableFeatureHighlights
+      highlightDsPermissions
     ) {
       navModel.children!.push(dsPermissions);
     }
