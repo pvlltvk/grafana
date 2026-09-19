@@ -22,6 +22,9 @@ const (
 	teamPermissionsResource  = "teams"
 	teamPermissionsRoleGroup = "Teams"
 
+	datasourcePermissionsResource  = "datasources"
+	datasourcePermissionsRoleGroup = "Data sources"
+
 	serviceAccountPermissionsResource  = "serviceaccounts"
 	serviceAccountPermissionsAPIGroup  = "iam.grafana.app"
 	serviceAccountPermissionsRoleGroup = "Service accounts"

@@ -12,6 +12,7 @@ import (
 	"github.com/grafana/grafana/pkg/services/accesscontrol/permreg"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/resourcepermissions"
 	"github.com/grafana/grafana/pkg/services/apiserver"
+	datasourceservice "github.com/grafana/grafana/pkg/services/datasources/service"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/folder/folderimpl"
 	"github.com/grafana/grafana/pkg/services/licensing/licensingtest"
@@ -97,5 +98,65 @@ func ProvideFolderPermissions(
 		&serviceaccountstest.FakeServiceAccountService{},
 		actionSets,
 		apiserver.ProvideDirectRestConfigProvider(),
+	)
+}
+
+func ProvideDatasourcePermissions(
+	features featuremgmt.FeatureToggles,
+	cfg *setting.Cfg,
+	sqlStore *sqlstore.SQLStore,
+) (*ossaccesscontrol.DatasourcePermissionsService, error) {
+	actionSets := resourcepermissions.NewActionSetService()
+
+	license := licensingtest.NewFakeLicensing()
+	license.On("FeatureEnabled", "accesscontrol.enforcement").Return(true).Maybe()
+
+	ac := acimpl.ProvideAccessControl(featuremgmt.WithFeatures())
+
+	quotaService := quotatest.New(false, nil)
+
+	acSvc := acimpl.ProvideOSSService(
+		cfg, acdb.ProvideService(sqlStore), actionSets, localcache.ProvideService(),
+		features, tracing.InitializeTracerForTest(), sqlStore, permreg.ProvidePermissionRegistry(),
+		nil,
+	)
+
+	orgService, err := orgimpl.ProvideService(legacysql.NewDatabaseProvider(sqlStore), cfg, quotaService)
+	if err != nil {
+		return nil, err
+	}
+	teamSvc, err := teamimpl.ProvideService(legacysql.NewDatabaseProvider(sqlStore), cfg, tracing.InitializeTracerForTest(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	userSvc, err := userimpl.ProvideService(
+		legacysql.NewDatabaseProvider(sqlStore),
+		orgService,
+		cfg,
+		teamSvc,
+		localcache.ProvideService(),
+		tracing.InitializeTracerForTest(),
+		quotaService,
+		bundleregistry.ProvideService(),
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return ossaccesscontrol.ProvideDatasourcePermissionsService(
+		cfg,
+		features,
+		routing.NewRouteRegister(),
+		sqlStore,
+		ac,
+		license,
+		datasourceservice.ProvideDataSourceRetriever(sqlStore, features),
+		acSvc,
+		teamSvc,
+		userSvc,
+		&serviceaccountstest.FakeServiceAccountService{},
+		actionSets,
 	)
 }

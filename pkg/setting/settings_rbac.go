@@ -16,6 +16,10 @@ type RBACSettings struct {
 	ResetBasicRoles bool
 	// RBAC single organization. This configuration option is subject to change.
 	SingleOrganization bool
+	// Enforce per-data-source permissions. When enabled, the blanket
+	// datasources:read/query grant on the Viewer basic role is withdrawn and
+	// access is resolved from managed permissions instead.
+	DatasourcePermissionsEnforcement bool
 	// PluginsCleanup lists plugin IDs whose RBAC data (roles, permissions, seed assignments)
 	// should be purged from the database at startup.
 	PluginsCleanup []string
@@ -49,6 +53,7 @@ func (cfg *Cfg) readRBACSettings() {
 	s.PermissionValidationEnabled = rbac.Key("permission_validation_enabled").MustBool(false)
 	s.ResetBasicRoles = rbac.Key("reset_basic_roles").MustBool(false)
 	s.SingleOrganization = rbac.Key("single_organization").MustBool(false)
+	s.DatasourcePermissionsEnforcement = rbac.Key("datasource_permissions_enforcement").MustBool(false)
 	s.PluginsCleanup = util.SplitString(rbac.Key("plugins_cleanup").MustString(""))
 	s.GlobalRoleSeedingEnabled = rbac.Key("global_role_seeding_enabled").MustBool(false)
 

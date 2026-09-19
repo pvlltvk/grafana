@@ -140,7 +140,7 @@ func setupTestEnvironment(t *testing.T, cfg *setting.Cfg, features featuremgmt.F
 		tracer:                tracing.InitializeTracerForTest(),
 		DataSourcesService:    &datafakes.FakeDataSourceService{},
 
-		dsGuardian:              guardian.ProvideGuardian(),
+		dsGuardian:              guardian.ProvideGuardian(cfg),
 		publicDashboardsService: &publicdashboards.FakePublicDashboardService{},
 	}
 

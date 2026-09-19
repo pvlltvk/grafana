@@ -56,6 +56,16 @@ func TestResourcePermissionsRoleRegistrations(t *testing.T) {
 			scope:         "teams:*",
 		},
 		{
+			name:          "datasources",
+			got:           DatasourcePermissionsRoleRegistrations(),
+			readerName:    "fixed:datasources.permissions:reader",
+			writerName:    "fixed:datasources.permissions:writer",
+			group:         "Data sources",
+			readerActions: []string{"datasources.permissions:read"},
+			writerActions: []string{"datasources.permissions:read", "datasources.permissions:write"},
+			scope:         "datasources:*",
+		},
+		{
 			name:          "service accounts",
 			got:           ServiceAccountPermissionsRoleRegistrations(),
 			readerName:    "fixed:serviceaccounts.permissions:reader",

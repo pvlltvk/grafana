@@ -10,6 +10,12 @@ import (
 
 const (
 	openSource = "Open Source"
+
+	// FeatureDatasourcePermissions is the licensed feature name that gates
+	// per-data-source permission enforcement. Enterprise answers it from the
+	// license; OSS answers it from the rbac.datasource_permissions_enforcement
+	// setting so the same two call sites keep working unchanged.
+	FeatureDatasourcePermissions = "dspermissions.enforcement"
 )
 
 type OSSLicensingService struct {
@@ -41,12 +47,21 @@ func (l *OSSLicensingService) LicenseURL(showAdminLicensingPage bool) string {
 	return "https://grafana.com/oss/grafana?utm_source=grafana_footer"
 }
 
-func (*OSSLicensingService) EnabledFeatures() map[string]bool {
-	return map[string]bool{}
+func (l *OSSLicensingService) EnabledFeatures() map[string]bool {
+	features := map[string]bool{}
+	if l.datasourcePermissionsEnforced() {
+		features[FeatureDatasourcePermissions] = true
+	}
+	return features
 }
 
-func (*OSSLicensingService) FeatureEnabled(feature string) bool {
-	return false
+func (l *OSSLicensingService) FeatureEnabled(feature string) bool {
+	return feature == FeatureDatasourcePermissions && l.datasourcePermissionsEnforced()
+}
+
+// Cfg is nil in a number of tests that construct OSSLicensingService directly.
+func (l *OSSLicensingService) datasourcePermissionsEnforced() bool {
+	return l.Cfg != nil && l.Cfg.RBAC.DatasourcePermissionsEnforcement
 }
 
 func ProvideService(cfg *setting.Cfg, hooksService *hooks.HooksService) *OSSLicensingService {
