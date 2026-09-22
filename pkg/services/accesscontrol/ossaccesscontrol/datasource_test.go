@@ -3,10 +3,12 @@ package ossaccesscontrol_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/grafana/grafana/pkg/infra/db"
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/ossaccesscontrol"
@@ -15,6 +17,7 @@ import (
 	datasourceservice "github.com/grafana/grafana/pkg/services/datasources/service"
 	"github.com/grafana/grafana/pkg/services/featuremgmt"
 	"github.com/grafana/grafana/pkg/services/sqlstore"
+	"github.com/grafana/grafana/pkg/services/team"
 	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/util/testutil"
 )
@@ -57,6 +60,84 @@ func permissionReader() *user.SignedInUser {
 			datasources.ActionPermissionsRead: {"datasources:*"},
 		}},
 	}
+}
+
+func setupDatasourcePermissionsEnv(t *testing.T) (*actestutil.DatasourcePermissionsEnv, *sqlstore.SQLStore, *datasources.DataSource) {
+	t.Helper()
+
+	sqlStore, cfg := sqlstore.InitTestDB(t)
+	// Each grant is read back immediately, so the permission cache would hide the
+	// very transitions under test.
+	cfg.RBAC.PermissionCache = false
+
+	env, err := actestutil.ProvideDatasourcePermissionsEnv(featuremgmt.WithFeatures(), cfg, sqlStore)
+	require.NoError(t, err)
+
+	store := datasourceservice.CreateStore(sqlStore, log.New("datasource-permissions-test"))
+	ds, err := store.AddDataSource(context.Background(), &datasources.AddDataSourceCommand{
+		OrgID:  testOrgID,
+		Name:   "clickhouse",
+		Type:   "grafana-clickhouse-datasource",
+		Access: datasources.DS_ACCESS_PROXY,
+		URL:    "http://localhost:8123",
+	})
+	require.NoError(t, err)
+
+	return env, sqlStore, ds
+}
+
+func setTeamMembership(t *testing.T, sqlStore *sqlstore.SQLStore, teamID, userID int64, member bool) {
+	t.Helper()
+
+	err := sqlStore.WithDbSession(context.Background(), func(sess *db.Session) error {
+		if !member {
+			_, err := sess.Exec("DELETE FROM team_member WHERE org_id = ? AND team_id = ? AND user_id = ?",
+				testOrgID, teamID, userID)
+			return err
+		}
+		now := time.Now()
+		_, err := sess.Exec(
+			"INSERT INTO team_member (org_id, team_id, user_id, permission, created, updated) VALUES (?, ?, ?, ?, ?, ?)",
+			testOrgID, teamID, userID, 0, now, now)
+		return err
+	})
+	require.NoError(t, err)
+}
+
+// queryScopes resolves the data source scopes a user may query. Team IDs are read
+// back from the store rather than asserted onto the user, so that membership is
+// what the assertion actually depends on.
+func queryScopes(t *testing.T, env *actestutil.DatasourcePermissionsEnv, userID int64) []string {
+	t.Helper()
+	ctx := context.Background()
+
+	teamIDs, _, err := env.TeamService.GetTeamIDsByUser(ctx, &team.GetTeamIDsByUserQuery{OrgID: testOrgID, UserID: userID})
+	require.NoError(t, err)
+
+	perms, err := env.AccessControl.GetUserPermissions(ctx,
+		&user.SignedInUser{UserID: userID, OrgID: testOrgID, TeamIDs: teamIDs},
+		accesscontrol.Options{},
+	)
+	require.NoError(t, err)
+
+	scopes := []string{}
+	for _, p := range perms {
+		if p.Action == datasources.ActionQuery {
+			scopes = append(scopes, p.Scope)
+		}
+	}
+	return scopes
+}
+
+func createUser(t *testing.T, env *actestutil.DatasourcePermissionsEnv, login string) *user.User {
+	t.Helper()
+
+	u, err := env.UserService.Create(context.Background(), &user.CreateUserCommand{
+		Login: login,
+		OrgID: testOrgID,
+	})
+	require.NoError(t, err)
+	return u
 }
 
 func TestIntegrationDatasourcePermissionsService(t *testing.T) {
@@ -162,5 +243,35 @@ func TestIntegrationDatasourcePermissionsService(t *testing.T) {
 
 		_, err := svc.SetBuiltInRolePermission(context.Background(), testOrgID, "Viewer", ds.UID, "View")
 		assert.Error(t, err)
+	})
+
+	// Teams are the intended production grant mechanism: the rollout restricts a
+	// data source by deleting its seeded built-in grants and granting a team
+	// instead. Nothing else in this package covers that path.
+	t.Run("a team grant follows team membership", func(t *testing.T) {
+		env, sqlStore, ds := setupDatasourcePermissionsEnv(t)
+		ctx := context.Background()
+		scope := datasources.ScopeProvider.GetResourceScopeUID(ds.UID)
+
+		member := createUser(t, env, "member")
+		outsider := createUser(t, env, "outsider")
+
+		tm, err := env.TeamService.CreateTeam(ctx, &team.CreateTeamCommand{Name: "rbac-team", OrgID: testOrgID})
+		require.NoError(t, err)
+		setTeamMembership(t, sqlStore, tm.ID, member.ID, true)
+
+		_, err = env.Permissions.SetTeamPermission(ctx, testOrgID, tm.ID, ds.UID, "Query")
+		require.NoError(t, err)
+
+		assert.Contains(t, queryScopes(t, env, member.ID), scope,
+			"a team member should inherit the team's Query grant")
+		assert.NotContains(t, queryScopes(t, env, outsider.ID), scope,
+			"a non-member should not inherit it")
+
+		setTeamMembership(t, sqlStore, tm.ID, member.ID, false)
+
+		assert.NotContains(t, queryScopes(t, env, member.ID), scope,
+			"removing the membership should revoke the inherited grant")
+		assert.NotContains(t, queryScopes(t, env, outsider.ID), scope)
 	})
 }

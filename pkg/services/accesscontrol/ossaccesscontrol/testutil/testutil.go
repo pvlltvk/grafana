@@ -6,6 +6,7 @@ import (
 	"github.com/grafana/grafana/pkg/api/routing"
 	"github.com/grafana/grafana/pkg/infra/localcache"
 	"github.com/grafana/grafana/pkg/infra/tracing"
+	"github.com/grafana/grafana/pkg/services/accesscontrol"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/acimpl"
 	acdb "github.com/grafana/grafana/pkg/services/accesscontrol/database"
 	"github.com/grafana/grafana/pkg/services/accesscontrol/ossaccesscontrol"
@@ -23,7 +24,9 @@ import (
 	"github.com/grafana/grafana/pkg/services/sqlstore"
 	"github.com/grafana/grafana/pkg/services/supportbundles/bundleregistry"
 	"github.com/grafana/grafana/pkg/services/supportbundles/supportbundlestest"
+	"github.com/grafana/grafana/pkg/services/team"
 	"github.com/grafana/grafana/pkg/services/team/teamimpl"
+	"github.com/grafana/grafana/pkg/services/user"
 	"github.com/grafana/grafana/pkg/services/user/userimpl"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/storage/legacysql"
@@ -101,11 +104,35 @@ func ProvideFolderPermissions(
 	)
 }
 
+// DatasourcePermissionsEnv exposes the collaborators built alongside the data
+// source permissions service. Team grants are only meaningful against real
+// membership rows, so a test that wants to assert them needs the team and
+// access control services too — asserting against a hand-supplied list of team
+// IDs would only restate its own setup.
+type DatasourcePermissionsEnv struct {
+	Permissions   *ossaccesscontrol.DatasourcePermissionsService
+	TeamService   team.Service
+	UserService   user.Service
+	AccessControl accesscontrol.Service
+}
+
 func ProvideDatasourcePermissions(
 	features featuremgmt.FeatureToggles,
 	cfg *setting.Cfg,
 	sqlStore *sqlstore.SQLStore,
 ) (*ossaccesscontrol.DatasourcePermissionsService, error) {
+	env, err := ProvideDatasourcePermissionsEnv(features, cfg, sqlStore)
+	if err != nil {
+		return nil, err
+	}
+	return env.Permissions, nil
+}
+
+func ProvideDatasourcePermissionsEnv(
+	features featuremgmt.FeatureToggles,
+	cfg *setting.Cfg,
+	sqlStore *sqlstore.SQLStore,
+) (*DatasourcePermissionsEnv, error) {
 	actionSets := resourcepermissions.NewActionSetService()
 
 	license := licensingtest.NewFakeLicensing()
@@ -145,7 +172,7 @@ func ProvideDatasourcePermissions(
 		return nil, err
 	}
 
-	return ossaccesscontrol.ProvideDatasourcePermissionsService(
+	permissions, err := ossaccesscontrol.ProvideDatasourcePermissionsService(
 		cfg,
 		features,
 		routing.NewRouteRegister(),
@@ -159,4 +186,14 @@ func ProvideDatasourcePermissions(
 		&serviceaccountstest.FakeServiceAccountService{},
 		actionSets,
 	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DatasourcePermissionsEnv{
+		Permissions:   permissions,
+		TeamService:   teamSvc,
+		UserService:   userSvc,
+		AccessControl: acSvc,
+	}, nil
 }
