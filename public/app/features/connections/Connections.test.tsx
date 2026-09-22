@@ -3,11 +3,14 @@ import { Route, Routes } from 'react-router-dom-v5-compat';
 import { render } from 'test/test-utils';
 
 import { type GrafanaConfig, locationUtil } from '@grafana/data';
-import { config } from '@grafana/runtime';
+import { GrafanaEdition } from '@grafana/data/internal';
+import { config, setPluginComponentsHook, setPluginLinksHook } from '@grafana/runtime';
+import * as backendSrvModule from 'app/core/services/backend_srv';
 import { contextSrv } from 'app/core/services/context_srv';
 import * as api from 'app/features/datasources/api';
 import { getMockDataSources } from 'app/features/datasources/mocks/dataSourcesMocks';
 import { configureStore } from 'app/store/configureStore';
+import { AccessControlAction } from 'app/types/accessControl';
 
 import { getPluginsStateMock } from '../plugins/admin/mocks/mockHelpers';
 
@@ -163,6 +166,80 @@ describe('Connections', () => {
     // We expect not to see the text that would be rendered by the core "Add new connection" page
     expect(screen.queryByText('Data sources')).not.toBeInTheDocument();
     expect(screen.queryByText('No results matching your query were found')).not.toBeInTheDocument();
+  });
+
+  describe('data source permissions route', () => {
+    const originalBuildInfo = config.buildInfo;
+    const originalLicenseInfo = config.licenseInfo;
+    const permissionsPath = `${ROUTES.DataSourcesEdit.replace(':uid', 'test-uid')}/permissions`;
+    const upsellHeading = /Secure access to data with data source permissions/;
+
+    // The Permissions component fetches over the network on mount; only the two reads it
+    // performs are stubbed, so the assertions below still exercise the real component.
+    const get = jest.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/description')) {
+        return Promise.resolve({ permissions: ['Query'], assignments: { builtInRoles: true } });
+      }
+      return Promise.resolve([{ id: 1, builtInRole: 'Viewer', permission: 'Query', isManaged: true, actions: [] }]);
+    });
+
+    beforeEach(() => {
+      config.buildInfo = { ...originalBuildInfo, edition: GrafanaEdition.OpenSource };
+      config.licenseInfo = { ...originalLicenseInfo, enabledFeatures: {} };
+      // Both branches render EditDataSourceActions, which pulls plugin extensions.
+      setPluginLinksHook(() => ({ links: [], isLoading: false }));
+      setPluginComponentsHook(() => ({ components: [], isLoading: false }));
+      get.mockClear();
+      jest
+        .spyOn(backendSrvModule, 'getBackendSrv')
+        .mockReturnValue({ get } as unknown as ReturnType<typeof backendSrvModule.getBackendSrv>);
+    });
+
+    afterEach(() => {
+      config.buildInfo = originalBuildInfo;
+      config.licenseInfo = originalLicenseInfo;
+      jest.restoreAllMocks();
+    });
+
+    test('routes to the Enterprise upsell page when enforcement is off', async () => {
+      renderPage(permissionsPath);
+
+      expect(await screen.findByText(upsellHeading)).toBeVisible();
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    test('routes to the real permissions page, scoped to the data source in the url, once enforcement is on', async () => {
+      config.licenseInfo.enabledFeatures = { 'dspermissions.enforcement': true };
+
+      renderPage(permissionsPath);
+
+      expect(await screen.findByText('Viewer')).toBeVisible();
+      // The uid from the route must reach the access-control API, otherwise the tab would
+      // silently render another data source's permissions.
+      expect(get).toHaveBeenCalledWith('/api/access-control/datasources/test-uid', undefined);
+      expect(screen.queryByText(upsellHeading)).not.toBeInTheDocument();
+    });
+
+    test.each([
+      { canWrite: true, desc: 'offers the add-permission control to a user who may write permissions' },
+      { canWrite: false, desc: 'hides the add-permission control from a user who may only read them' },
+    ])('$desc', async ({ canWrite }) => {
+      config.licenseInfo.enabledFeatures = { 'dspermissions.enforcement': true };
+      jest.mocked(contextSrv.hasPermissionInMetadata).mockReturnValue(canWrite);
+
+      renderPage(permissionsPath);
+
+      expect(await screen.findByText('Viewer')).toBeVisible();
+      expect(contextSrv.hasPermissionInMetadata).toHaveBeenCalledWith(
+        AccessControlAction.DataSourcesPermissionsWrite,
+        expect.anything()
+      );
+      if (canWrite) {
+        expect(screen.getByRole('button', { name: 'Add a permission' })).toBeVisible();
+      } else {
+        expect(screen.queryByRole('button', { name: 'Add a permission' })).not.toBeInTheDocument();
+      }
+    });
   });
 
   describe('with appSubUrl', () => {
